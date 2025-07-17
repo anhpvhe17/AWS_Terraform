@@ -39,3 +39,27 @@ AWS account with Glue enabled.
 Terraform installed locally.
 
 IAM permissions to create Glue, IAM roles, S3 objects.
+
+How to run
+terraform init
+
+terraform plan `
+  -var="data_bucket_name=my-first-s3-bucket-anhpvhe" `
+  -var="log_bucket_name=my-log-storage-bucket-anhpvhe" `
+  -var="glue_script_local_path=./scripts/batch_csv_to_parquet.py" `
+  -var="glue_script_s3_path=glue/scripts/batch_csv_to_parquet.py"
+
+terraform apply `
+  -var="data_bucket_name=my-first-s3-bucket-anhpvhe" `
+  -var="log_bucket_name=my-log-storage-bucket-anhpvhe" `
+  -var="glue_script_local_path=./scripts/batch_csv_to_parquet.py" `
+  -var="glue_script_s3_path=glue/scripts/batch_csv_to_parquet.py" `
+    -auto-approve
+
+terraform destroy `
+  -var="data_bucket_name=my-first-s3-bucket-anhpvhe" `
+  -var="log_bucket_name=my-log-storage-bucket-anhpvhe" `
+  -var="glue_script_local_path=./scripts/batch_csv_to_parquet.py" `
+  -var="glue_script_s3_path=glue/scripts/batch_csv_to_parquet.py" `
+  -auto-approve
+
