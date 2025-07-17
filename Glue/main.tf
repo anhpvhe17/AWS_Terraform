@@ -1,136 +1,95 @@
-############################
-# Locals
-############################
-locals {
-  glue_script_s3_path = "glue-scripts/batch_csv_to_parquet.py" # relative in module; uploaded below
+provider "aws" {
+  region = var.AWS_DEFAULT_REGION
 }
 
-############################
-# S3 object: upload Glue script
-############################
-# Requires that you've created the data bucket already (aws_s3_bucket.data_bucket)
+# ------------------------
+# Upload Glue Script to S3
+# ------------------------
 resource "aws_s3_object" "glue_job_script" {
-  bucket = aws_s3_bucket.data_bucket.bucket
-  key    = local.glue_script_s3_path
-  source = "${path.module}/glue_scripts/batch_csv_to_parquet.py"
-  etag   = filemd5("${path.module}/glue_scripts/batch_csv_to_parquet.py")
-  content_type = "text/x-python"
+  bucket = var.data_bucket_name
+  key    = "${var.glue_script_s3_path}"
+  source = var.glue_script_local_path
+  etag   = filemd5(var.glue_script_local_path)
 }
 
-############################
+# ------------------------
 # IAM Role for Glue
-############################
-data "aws_iam_policy_document" "glue_assume_role" {
-  statement {
-    actions = ["sts:AssumeRole"]
-    principals {
-      type        = "Service"
-      identifiers = ["glue.amazonaws.com"]
-    }
-  }
-}
-
+# ------------------------
 resource "aws_iam_role" "glue_service_role" {
-  name               = "AWSGlueServiceRole-ETL"
-  assume_role_policy = data.aws_iam_policy_document.glue_assume_role.json
-  tags = {
-    Name = "Glue ETL Role"
-  }
+  name = "GlueBatchServiceRole"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17",
+    Statement = [
+      {
+        Action = "sts:AssumeRole",
+        Effect = "Allow",
+        Principal = {
+          Service = "glue.amazonaws.com"
+        }
+      }
+    ]
+  })
 }
 
-############################
-# IAM Policy: S3 access + logs + Glue defaults
-############################
+# ------------------------
+# Glue Policy Document
+# ------------------------
 data "aws_iam_policy_document" "glue_access" {
   statement {
-    sid     = "S3AccessDataAndLogs"
     actions = [
       "s3:GetObject",
       "s3:PutObject",
       "s3:DeleteObject",
-      "s3:ListBucket",
-      "s3:GetBucketLocation"
+      "s3:ListBucket"
     ]
+
     resources = [
-      aws_s3_bucket.data_bucket.arn,
-      "${aws_s3_bucket.data_bucket.arn}/*",
-      aws_s3_bucket.log_bucket.arn,
-      "${aws_s3_bucket.log_bucket.arn}/*",
+      "arn:aws:s3:::${var.data_bucket_name}",
+      "arn:aws:s3:::${var.data_bucket_name}/*",
+      "arn:aws:s3:::${var.log_bucket_name}",
+      "arn:aws:s3:::${var.log_bucket_name}/*"
     ]
   }
 
   statement {
-    sid     = "CloudWatchLogs"
-    actions = [
-      "logs:CreateLogGroup",
-      "logs:CreateLogStream",
-      "logs:PutLogEvents",
-      "logs:DescribeLogStreams"
-    ]
-    resources = ["arn:aws:logs:*:*:*"]
-  }
-
-  # Glue needs access to its own resources
-  statement {
-    sid     = "GlueBasic"
-    actions = [
-      "glue:Get*",
-      "glue:Create*",
-      "glue:Update*",
-      "glue:Delete*",
-      "glue:Batch*"
-    ]
+    actions   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
     resources = ["*"]
   }
 }
 
-resource "aws_iam_policy" "glue_access_policy" {
-  name   = "GlueETLAccess"
+resource "aws_iam_policy" "glue_policy" {
+  name   = "GlueBatchPolicy"
   policy = data.aws_iam_policy_document.glue_access.json
 }
 
-resource "aws_iam_role_policy_attachment" "glue_access_attach" {
+resource "aws_iam_role_policy_attachment" "glue_attach" {
   role       = aws_iam_role.glue_service_role.name
-  policy_arn = aws_iam_policy.glue_access_policy.arn
+  policy_arn = aws_iam_policy.glue_policy.arn
 }
 
-############################
+# ------------------------
 # Glue Job
-############################
+# ------------------------
 resource "aws_glue_job" "batch_csv_to_parquet" {
-  name     = "batch-csv-to-parquet"
+  name     = "csv-to-parquet-job"
   role_arn = aws_iam_role.glue_service_role.arn
-
-  glue_version = "4.0"        # Spark 3
-  number_of_workers = 2
-  worker_type       = "G.1X"  # change as needed
 
   command {
     name            = "glueetl"
-    script_location = "s3://${aws_s3_bucket.data_bucket.bucket}/${local.glue_script_s3_path}"
+    script_location = "s3://${var.data_bucket_name}/${var.glue_script_s3_path}"
     python_version  = "3"
   }
 
-  # Default args; can be overridden at run time
   default_arguments = {
-    "--job-language"        = "python"
-    "--SOURCE_PATH"         = "s3://${aws_s3_bucket.data_bucket.bucket}/raw/"
-    "--TARGET_PATH"         = "s3://${aws_s3_bucket.data_bucket.bucket}/curated/"
-    "--PARTITION_COL"       = "ingest_date"
-    "--TempDir"             = "s3://${aws_s3_bucket.log_bucket.bucket}/glue/tmp/"
-    "--enable-metrics"      = "true"
-    "--enable-glue-datacatalog" = "true"
-    "--job-bookmark-option" = "job-bookmark-enable"
+    "--job-language"          = "python"
+    "--enable-continuous-cloudwatch-log" = "true"
+    "--enable-metrics"        = ""
+    "--SOURCE_PATH"           = "s3://${var.data_bucket_name}/raw/"
+    "--TARGET_PATH"           = "s3://${var.data_bucket_name}/curated/"
+    "--TempDir"               = "s3://${var.log_bucket_name}/glue/tmp/"
   }
 
   max_retries = 1
-
-  execution_property {
-    max_concurrent_runs = 1
-  }
-
-  tags = {
-    Environment = "Production"
-    Project     = "AWS_Terraform"
-  }
+  glue_version = "4.0"
 }
